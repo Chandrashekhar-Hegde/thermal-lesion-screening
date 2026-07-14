@@ -1,0 +1,27 @@
+data:
+  root: data/dmr-ir            # DMR-IR thermography export; see README
+  classes: {healthy: 0, sick: 1}
+  image_size: [224, 224]
+
+split:
+  test_frac: 0.20
+  val_frac: 0.20
+  seed: 42
+
+train:
+  epochs: 30
+  batch_size: 32
+  lr: 0.0003
+  weight_decay: 0.0001
+  backbone: resnet18           # ImageNet-pretrained, final layer replaced
+  early_stopping_patience: 6
+
+eval:
+  # Fix the miss rate you can clinically tolerate, then report whatever
+  # specificity that costs. Do not tune the threshold to flatter the headline.
+  target_sensitivity: 0.90
+  n_bootstrap: 2000
+
+edge:
+  onnx_path: artifacts/model.onnx
+  benchmark_runs: 200
