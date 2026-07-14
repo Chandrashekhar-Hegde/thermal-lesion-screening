@@ -5,6 +5,6 @@ torch>=2.0
 torchvision>=0.15
 pydicom>=2.4
 onnx>=1.15
-onnxruntime>=1.17
+onnxruntime>=1.27.0
 pillow>=10.0
 pyyaml>=6.0
