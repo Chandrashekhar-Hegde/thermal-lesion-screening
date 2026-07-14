@@ -20,6 +20,7 @@ import argparse
 import platform
 import statistics
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -32,7 +33,7 @@ def _hardware_summary() -> dict:
         "processor": platform.processor() or "unknown",
         "python": platform.python_version(),
     }
-    try:                                        # Pi and most Linux SBCs
+    try:  # Pi and most Linux SBCs
         with open("/proc/cpuinfo") as f:
             for line in f:
                 if line.startswith("Model"):
@@ -55,17 +56,27 @@ def benchmark(
     p95 is the number that matters for a clinician standing over a patient. A
     good mean with a heavy tail still feels broken in the room.
     """
+    model_path = Path(onnx_path)
+    if not model_path.is_file():
+        raise FileNotFoundError(f"ONNX model not found: {model_path}")
+    if runs <= 0 or warmup < 0 or threads <= 0:
+        raise ValueError("runs and threads must be positive; warmup cannot be negative")
+
     import onnxruntime as ort
 
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = threads
-    sess = ort.InferenceSession(onnx_path, opts, providers=["CPUExecutionProvider"])
+    sess = ort.InferenceSession(
+        str(model_path),
+        opts,
+        providers=["CPUExecutionProvider"],
+    )
     name = sess.get_inputs()[0].name
 
     rng = np.random.default_rng(0)
     x = rng.standard_normal(input_shape).astype(np.float32)
 
-    for _ in range(warmup):                     # let the allocator settle
+    for _ in range(warmup):  # let the allocator settle
         sess.run(None, {name: x})
 
     times = []
@@ -74,15 +85,14 @@ def benchmark(
         sess.run(None, {name: x})
         times.append((time.perf_counter() - t0) * 1000.0)
 
-    times.sort()
     return {
         "hardware": _hardware_summary(),
         "threads": threads,
         "runs": runs,
         "mean_ms": round(statistics.mean(times), 2),
         "median_ms": round(statistics.median(times), 2),
-        "p95_ms": round(times[int(0.95 * len(times)) - 1], 2),
-        "p99_ms": round(times[int(0.99 * len(times)) - 1], 2),
+        "p95_ms": round(float(np.percentile(times, 95, method="nearest")), 2),
+        "p99_ms": round(float(np.percentile(times, 99, method="nearest")), 2),
         "min_ms": round(times[0], 2),
         "max_ms": round(times[-1], 2),
         "throughput_fps": round(1000.0 / statistics.mean(times), 2),

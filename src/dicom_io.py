@@ -24,9 +24,14 @@ logger = logging.getLogger(__name__)
 
 try:
     import pydicom
-    from pydicom.pixel_data_handlers.util import apply_modality_lut
+
+    try:
+        from pydicom.pixels import apply_modality_lut
+    except ImportError:  # pydicom < 3
+        from pydicom.pixel_data_handlers.util import apply_modality_lut
+
     HAVE_PYDICOM = True
-except ImportError:      # keeps the repo importable without the optional dep
+except ImportError:  # keeps folder-based workflows importable without pydicom
     HAVE_PYDICOM = False
 
 
@@ -60,7 +65,7 @@ def read_dicom_pixels(path: str | Path) -> np.ndarray:
     arr = apply_modality_lut(ds.pixel_array, ds).astype(np.float32)
 
     if getattr(ds, "PhotometricInterpretation", "") == "MONOCHROME1":
-        arr = arr.max() - arr        # MONOCHROME1 is inverted
+        arr = arr.max() + arr.min() - arr
 
     return arr
 
@@ -119,9 +124,7 @@ def scan_dicom_tree(root: str | Path, label_map: dict[str, int] | None = None) -
             )
         df["label"] = df["label"].astype(int)
 
-    logger.info(
-        "manifest: %d images, %d patients", len(df), df["patient_id"].nunique()
-    )
+    logger.info("manifest: %d images, %d patients", len(df), df["patient_id"].nunique())
     return df
 
 
@@ -158,7 +161,5 @@ def manifest_from_folders(root: str | Path, classes: dict[str, int]) -> pd.DataF
     dupes = df.groupby("patient_id")["label"].nunique()
     if (dupes > 1).any():
         bad = dupes[dupes > 1].index.tolist()
-        raise ValueError(
-            f"patient(s) {bad} carry conflicting labels. Resolve before training."
-        )
+        raise ValueError(f"patient(s) {bad} carry conflicting labels. Resolve before training.")
     return df

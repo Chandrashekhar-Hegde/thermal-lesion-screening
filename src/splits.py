@@ -16,12 +16,12 @@ code path in this repository that can produce a patient-leaking split.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 
 
 class PatientLeakageError(AssertionError):
@@ -40,6 +40,30 @@ class Split:
         return {"train": len(self.train), "val": len(self.val), "test": len(self.test)}
 
 
+def _validate_manifest(
+    manifest: pd.DataFrame,
+    label_col: str,
+    patient_col: str,
+) -> None:
+    required = {label_col, patient_col}
+    missing = required - set(manifest.columns)
+    if missing:
+        raise ValueError(f"manifest is missing required column(s): {sorted(missing)}")
+    if manifest.empty:
+        raise ValueError("manifest cannot be empty")
+    if manifest[list(required)].isna().any().any():
+        raise ValueError("labels and patient identifiers cannot be empty")
+
+    classes = set(manifest[label_col].unique().tolist())
+    if classes != {0, 1}:
+        raise ValueError("manifest labels must contain both binary classes: 0 and 1")
+
+    labels_per_patient = manifest.groupby(patient_col)[label_col].nunique()
+    conflicts = labels_per_patient[labels_per_patient > 1]
+    if not conflicts.empty:
+        raise ValueError(f"patient(s) have conflicting labels: {conflicts.index.tolist()[:5]}")
+
+
 def assert_no_patient_leakage(
     manifest: pd.DataFrame,
     split: Split,
@@ -50,6 +74,12 @@ def assert_no_patient_leakage(
     Called automatically by every split function in this module. Also exercised
     directly by tests/test_splits.py.
     """
+    allocated = np.concatenate([split.train, split.val, split.test])
+    if (allocated < 0).any() or (allocated >= len(manifest)).any():
+        raise PatientLeakageError("split contains an out-of-range image index")
+    if len(allocated) != len(manifest) or len(np.unique(allocated)) != len(manifest):
+        raise PatientLeakageError("each image must appear in exactly one split partition")
+
     parts = {
         "train": set(manifest.iloc[split.train][patient_col]),
         "val": set(manifest.iloc[split.val][patient_col]),
@@ -80,34 +110,46 @@ def patient_level_split(
     whole patients move together, realised fractions will not land exactly on
     the requested ones — that is expected and correct.
     """
+    _validate_manifest(manifest, label_col, patient_col)
     if not 0 < test_frac < 1 or not 0 < val_frac < 1:
         raise ValueError("test_frac and val_frac must each lie strictly in (0, 1)")
+    if test_frac + val_frac >= 1:
+        raise ValueError("test_frac + val_frac must be less than 1")
 
-    y = manifest[label_col].to_numpy()
-    groups = manifest[patient_col].to_numpy()
-    idx = np.arange(len(manifest))
-
-    # Carve out the test set first.
-    n_test_folds = max(2, round(1 / test_frac))
-    sgkf = StratifiedGroupKFold(n_splits=n_test_folds, shuffle=True, random_state=seed)
-    dev_idx, test_idx = next(sgkf.split(idx, y, groups))
-
-    # Then split the remainder into train/val, again grouped by patient.
-    rel_val = val_frac / (1.0 - test_frac)
-    n_val_folds = max(2, round(1 / rel_val))
-    sgkf_val = StratifiedGroupKFold(
-        n_splits=n_val_folds, shuffle=True, random_state=seed + 1
-    )
-    sub_train, sub_val = next(
-        sgkf_val.split(dev_idx, y[dev_idx], groups[dev_idx])
-    )
+    patient_table = manifest[[patient_col, label_col]].drop_duplicates()
+    try:
+        development, test = train_test_split(
+            patient_table,
+            test_size=test_frac,
+            stratify=patient_table[label_col],
+            random_state=seed,
+        )
+        relative_val_fraction = val_frac / (1.0 - test_frac)
+        train, val = train_test_split(
+            development,
+            test_size=relative_val_fraction,
+            stratify=development[label_col],
+            random_state=seed + 1,
+        )
+    except ValueError as error:
+        raise ValueError(
+            "unable to create stratified patient splits; add more patients per class "
+            "or adjust the requested fractions"
+        ) from error
 
     split = Split(
-        train=dev_idx[sub_train],
-        val=dev_idx[sub_val],
-        test=test_idx,
+        train=np.flatnonzero(manifest[patient_col].isin(train[patient_col])),
+        val=np.flatnonzero(manifest[patient_col].isin(val[patient_col])),
+        test=np.flatnonzero(manifest[patient_col].isin(test[patient_col])),
     )
     assert_no_patient_leakage(manifest, split, patient_col)
+    for name, indices in (
+        ("train", split.train),
+        ("val", split.val),
+        ("test", split.test),
+    ):
+        if set(manifest.iloc[indices][label_col].unique()) != {0, 1}:
+            raise ValueError(f"{name} split does not contain both classes; use more patients")
     return split
 
 
@@ -124,6 +166,14 @@ def patient_level_cv(
     test set from `patient_level_split`, never on cross-validation folds — a
     CV score is an estimate you tuned against, not an independent result.
     """
+    _validate_manifest(manifest, label_col, patient_col)
+    if n_folds < 2:
+        raise ValueError("n_folds must be at least 2")
+    patient_labels = manifest[[patient_col, label_col]].drop_duplicates()
+    class_counts = patient_labels[label_col].value_counts()
+    if int(class_counts.min()) < n_folds:
+        raise ValueError("each class must have at least n_folds patients")
+
     y = manifest[label_col].to_numpy()
     groups = manifest[patient_col].to_numpy()
     idx = np.arange(len(manifest))
@@ -135,8 +185,12 @@ def patient_level_cv(
         yield idx[train_i], idx[val_i]
 
 
-def describe_split(manifest: pd.DataFrame, split: Split, label_col: str = "label",
-                   patient_col: str = "patient_id") -> pd.DataFrame:
+def describe_split(
+    manifest: pd.DataFrame,
+    split: Split,
+    label_col: str = "label",
+    patient_col: str = "patient_id",
+) -> pd.DataFrame:
     """Summary table to paste straight into a README or a paper's methods section."""
     rows = []
     for name, ix in (("train", split.train), ("val", split.val), ("test", split.test)):
