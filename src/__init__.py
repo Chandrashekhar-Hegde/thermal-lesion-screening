@@ -1,0 +1,1 @@
+"""Thermal lesion screening pipeline."""

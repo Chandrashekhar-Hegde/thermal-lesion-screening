@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using this metadata."
+title: "Thermal lesion screening"
+type: software
+authors:
+  - family-names: Hegde
+    given-names: Chandrashekhar
+repository-code: "https://github.com/Chandrashekhar-Hegde/thermal-lesion-screening"
+license: MIT

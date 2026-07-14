@@ -11,9 +11,11 @@ split:
 train:
   epochs: 30
   batch_size: 32
+  num_workers: 2
   lr: 0.0003
   weight_decay: 0.0001
   backbone: resnet18           # ImageNet-pretrained, final layer replaced
+  pretrained: true
   early_stopping_patience: 6
 
 eval:
@@ -21,6 +23,7 @@ eval:
   # specificity that costs. Do not tune the threshold to flatter the headline.
   target_sensitivity: 0.90
   n_bootstrap: 2000
+  patient_score_reducer: mean  # one mean score per patient before evaluation
 
 edge:
   onnx_path: artifacts/model.onnx

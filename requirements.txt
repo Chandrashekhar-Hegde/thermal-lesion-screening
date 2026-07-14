@@ -6,6 +6,5 @@ torchvision>=0.15
 pydicom>=2.4
 onnx>=1.15
 onnxruntime>=1.17
-matplotlib>=3.7
+pillow>=10.0
 pyyaml>=6.0
-pytest>=7.4

@@ -10,6 +10,8 @@ being able to defend out loud.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torchvision.models as tvm
@@ -33,19 +35,25 @@ def build_model(backbone: str = "resnet18", pretrained: bool = True) -> nn.Modul
 
 def export_onnx(
     model: nn.Module,
-    path: str = "artifacts/model.onnx",
+    path: str | Path = "artifacts/model.onnx",
     image_size: tuple[int, int] = (224, 224),
 ) -> str:
     """Export for edge deployment. ONNX Runtime on the Pi, not PyTorch."""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
-    dummy = torch.randn(1, 3, *image_size)
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        device = torch.device("cpu")
+    dummy = torch.randn(1, 3, *image_size, device=device)
     torch.onnx.export(
         model,
         dummy,
-        path,
+        str(output_path),
         input_names=["image"],
         output_names=["logit"],
         dynamic_axes={"image": {0: "batch"}, "logit": {0: "batch"}},
         opset_version=17,
     )
-    return path
+    return str(output_path)

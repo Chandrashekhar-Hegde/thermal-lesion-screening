@@ -17,12 +17,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.splits import (  # noqa: E402
-    Split,
     PatientLeakageError,
-    patient_level_split,
-    patient_level_cv,
+    Split,
     assert_no_patient_leakage,
     describe_split,
+    patient_level_cv,
+    patient_level_split,
 )
 
 
@@ -65,6 +65,15 @@ def test_every_image_used_exactly_once():
     assert len(np.unique(allocated)) == len(m), "an image was allocated twice"
 
 
+def test_requested_fractions_are_applied_to_patients():
+    manifest = make_manifest(n_patients=100)
+    split = patient_level_split(manifest, test_frac=0.2, val_frac=0.1, seed=2)
+
+    assert manifest.iloc[split.train]["patient_id"].nunique() == 70
+    assert manifest.iloc[split.val]["patient_id"].nunique() == 10
+    assert manifest.iloc[split.test]["patient_id"].nunique() == 20
+
+
 def test_both_classes_present_in_every_partition():
     m = make_manifest()
     s = patient_level_split(m, seed=3)
@@ -79,7 +88,7 @@ def test_leakage_detector_actually_fires():
     m = make_manifest()
     bad = Split(
         train=np.arange(0, 100),
-        val=np.arange(90, 140),   # overlaps train -> shares patients
+        val=np.arange(90, 140),  # overlaps train -> shares patients
         test=np.arange(140, len(m)),
     )
     with pytest.raises(PatientLeakageError):
@@ -89,9 +98,9 @@ def test_leakage_detector_actually_fires():
 def test_cv_folds_are_patient_grouped():
     m = make_manifest()
     for train_i, val_i in patient_level_cv(m, n_folds=5, seed=4):
-        assert not (
-            set(m.iloc[train_i]["patient_id"]) & set(m.iloc[val_i]["patient_id"])
-        ), "CV fold leaked a patient"
+        assert not (set(m.iloc[train_i]["patient_id"]) & set(m.iloc[val_i]["patient_id"])), (
+            "CV fold leaked a patient"
+        )
 
 
 def test_split_is_deterministic_under_seed():
@@ -107,3 +116,15 @@ def test_describe_split_reports_patient_counts():
     d = describe_split(m, s)
     assert set(d["split"]) == {"train", "val", "test"}
     assert d["patients"].sum() == m["patient_id"].nunique()
+
+
+def test_split_rejects_invalid_total_fraction():
+    with pytest.raises(ValueError, match="less than 1"):
+        patient_level_split(make_manifest(), test_frac=0.6, val_frac=0.4)
+
+
+def test_split_rejects_conflicting_patient_labels():
+    manifest = make_manifest()
+    manifest.loc[1, "label"] = 1 - manifest.loc[0, "label"]
+    with pytest.raises(ValueError, match="conflicting labels"):
+        patient_level_split(manifest)
