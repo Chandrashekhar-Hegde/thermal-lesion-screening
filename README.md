@@ -36,7 +36,7 @@ Run the checks:
 pip install -r requirements-ci.txt
 ruff check .
 ruff format --check .
-pytest
+python -m pytest
 ```
 
 ## Data

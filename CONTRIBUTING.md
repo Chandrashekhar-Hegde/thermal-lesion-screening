@@ -16,7 +16,7 @@ Run the checks before submitting a pull request:
 ```bash
 ruff check .
 ruff format --check .
-pytest
+python -m pytest
 ```
 
 Keep pull requests small. Explain the behavior change, the reason for it, and how it

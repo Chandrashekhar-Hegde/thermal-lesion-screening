@@ -6,7 +6,7 @@
 
 - [ ] `ruff check .`
 - [ ] `ruff format --check .`
-- [ ] `pytest`
+- [ ] `python -m pytest`
 - [ ] No clinical data, identifiers, credentials, or generated artifacts are included
 
 ## Evaluation changes
