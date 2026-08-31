@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedGroupKFold, train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 
 class PatientLeakageError(AssertionError):
@@ -38,6 +38,15 @@ class Split:
 
     def sizes(self) -> dict[str, int]:
         return {"train": len(self.train), "val": len(self.val), "test": len(self.test)}
+
+
+@dataclass(frozen=True)
+class RepeatedFold:
+    """One outer test fold with an inner validation partition."""
+
+    repeat: int
+    fold: int
+    split: Split
 
 
 def _validate_manifest(
@@ -174,15 +183,88 @@ def patient_level_cv(
     if int(class_counts.min()) < n_folds:
         raise ValueError("each class must have at least n_folds patients")
 
-    y = manifest[label_col].to_numpy()
-    groups = manifest[patient_col].to_numpy()
-    idx = np.arange(len(manifest))
+    patient_table = manifest[[patient_col, label_col]].drop_duplicates().reset_index(drop=True)
+    splitter = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    for train_patient_indices, val_patient_indices in splitter.split(
+        patient_table[patient_col], patient_table[label_col]
+    ):
+        train_patients = patient_table.iloc[train_patient_indices][patient_col]
+        val_patients = patient_table.iloc[val_patient_indices][patient_col]
+        train_i = np.flatnonzero(manifest[patient_col].isin(train_patients))
+        val_i = np.flatnonzero(manifest[patient_col].isin(val_patients))
+        if set(manifest.iloc[train_i][patient_col]) & set(manifest.iloc[val_i][patient_col]):
+            raise PatientLeakageError("patient-level cross-validation produced a leaking fold")
+        yield train_i, val_i
 
-    sgkf = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=seed)
-    for train_i, val_i in sgkf.split(idx, y, groups):
-        if set(groups[train_i]) & set(groups[val_i]):
-            raise PatientLeakageError("StratifiedGroupKFold produced a leaking fold")
-        yield idx[train_i], idx[val_i]
+
+def repeated_patient_level_cv(
+    manifest: pd.DataFrame,
+    n_folds: int = 5,
+    n_repeats: int = 5,
+    val_frac: float = 0.20,
+    label_col: str = "label",
+    patient_col: str = "patient_id",
+    seed: int = 42,
+) -> Iterator[RepeatedFold]:
+    """Yield repeated outer test folds with an inner validation split.
+
+    Every patient is used in exactly one outer test fold per repeat. The inner
+    validation patients are drawn only from that fold's development partition and
+    are used for checkpoint and operating-threshold selection.
+    """
+    _validate_manifest(manifest, label_col, patient_col)
+    if n_folds < 2:
+        raise ValueError("n_folds must be at least 2")
+    if n_repeats < 1:
+        raise ValueError("n_repeats must be at least 1")
+    if not 0 < val_frac < 1:
+        raise ValueError("val_frac must lie strictly in (0, 1)")
+
+    patient_table = manifest[[patient_col, label_col]].drop_duplicates().reset_index(drop=True)
+    class_counts = patient_table[label_col].value_counts()
+    if int(class_counts.min()) < n_folds:
+        raise ValueError("each class must have at least n_folds patients")
+
+    for repeat in range(n_repeats):
+        outer = StratifiedKFold(
+            n_splits=n_folds,
+            shuffle=True,
+            random_state=seed + repeat,
+        )
+        for fold, (development_indices, test_indices) in enumerate(
+            outer.split(patient_table[patient_col], patient_table[label_col])
+        ):
+            development = patient_table.iloc[development_indices]
+            test = patient_table.iloc[test_indices]
+            try:
+                train, val = train_test_split(
+                    development,
+                    test_size=val_frac,
+                    stratify=development[label_col],
+                    random_state=seed + 10_000 * repeat + fold,
+                )
+            except ValueError as error:
+                raise ValueError(
+                    "unable to create an inner stratified validation split; add more "
+                    "patients per class or adjust val_frac"
+                ) from error
+
+            split = Split(
+                train=np.flatnonzero(manifest[patient_col].isin(train[patient_col])),
+                val=np.flatnonzero(manifest[patient_col].isin(val[patient_col])),
+                test=np.flatnonzero(manifest[patient_col].isin(test[patient_col])),
+            )
+            assert_no_patient_leakage(manifest, split, patient_col)
+            for name, indices in (
+                ("train", split.train),
+                ("val", split.val),
+                ("test", split.test),
+            ):
+                if set(manifest.iloc[indices][label_col].unique()) != {0, 1}:
+                    raise ValueError(
+                        f"repeat {repeat}, fold {fold}: {name} does not contain both classes"
+                    )
+            yield RepeatedFold(repeat=repeat, fold=fold, split=split)
 
 
 def describe_split(
@@ -195,13 +277,14 @@ def describe_split(
     rows = []
     for name, ix in (("train", split.train), ("val", split.val), ("test", split.test)):
         sub = manifest.iloc[ix]
+        patient_rows = sub[[patient_col, label_col]].drop_duplicates()
         rows.append(
             {
                 "split": name,
                 "images": len(sub),
-                "patients": sub[patient_col].nunique(),
-                "positive": int(sub[label_col].sum()),
-                "positive_rate": round(float(sub[label_col].mean()), 3),
+                "patients": len(patient_rows),
+                "positive_patients": int(patient_rows[label_col].sum()),
+                "patient_positive_rate": round(float(patient_rows[label_col].mean()), 3),
             }
         )
     return pd.DataFrame(rows)

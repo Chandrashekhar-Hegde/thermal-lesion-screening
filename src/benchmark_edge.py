@@ -46,7 +46,7 @@ def _hardware_summary() -> dict:
 
 def benchmark(
     onnx_path: str,
-    input_shape: tuple[int, ...] = (1, 3, 224, 224),
+    input_shape: tuple[int, ...] | None = None,
     runs: int = 200,
     warmup: int = 20,
     threads: int = 4,
@@ -71,7 +71,20 @@ def benchmark(
         opts,
         providers=["CPUExecutionProvider"],
     )
-    name = sess.get_inputs()[0].name
+    model_input = sess.get_inputs()[0]
+    name = model_input.name
+    if input_shape is None:
+        inferred_shape = []
+        for axis, dimension in enumerate(model_input.shape):
+            if isinstance(dimension, int) and dimension > 0:
+                inferred_shape.append(dimension)
+            elif axis == 0:
+                inferred_shape.append(1)
+            else:
+                raise ValueError(
+                    "model has a dynamic non-batch input dimension; pass input_shape explicitly"
+                )
+        input_shape = tuple(inferred_shape)
 
     rng = np.random.default_rng(0)
     x = rng.standard_normal(input_shape).astype(np.float32)
@@ -93,8 +106,8 @@ def benchmark(
         "median_ms": round(statistics.median(times), 2),
         "p95_ms": round(float(np.percentile(times, 95, method="nearest")), 2),
         "p99_ms": round(float(np.percentile(times, 99, method="nearest")), 2),
-        "min_ms": round(times[0], 2),
-        "max_ms": round(times[-1], 2),
+        "min_ms": round(min(times), 2),
+        "max_ms": round(max(times), 2),
         "throughput_fps": round(1000.0 / statistics.mean(times), 2),
     }
 

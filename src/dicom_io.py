@@ -128,7 +128,12 @@ def scan_dicom_tree(root: str | Path, label_map: dict[str, int] | None = None) -
     return df
 
 
-def manifest_from_folders(root: str | Path, classes: dict[str, int]) -> pd.DataFrame:
+def manifest_from_folders(
+    root: str | Path,
+    classes: dict[str, int],
+    *,
+    validate_patient_labels: bool = True,
+) -> pd.DataFrame:
     """Fallback for plain image datasets (e.g. the DMR-IR export).
 
     Expects <root>/<class_name>/<patient_id>/<image>.png. The patient identifier
@@ -150,7 +155,7 @@ def manifest_from_folders(root: str | Path, classes: dict[str, int]) -> pd.DataF
                         "path": str(img),
                         "patient_id": pat_dir.name,
                         "label": int(label),
-                        "image_id": f"{pat_dir.name}_{img.stem}",
+                        "image_id": str(img.relative_to(root)),
                     }
                 )
 
@@ -158,8 +163,9 @@ def manifest_from_folders(root: str | Path, classes: dict[str, int]) -> pd.DataF
     if df.empty:
         raise ValueError(f"no images found under {root}")
 
-    dupes = df.groupby("patient_id")["label"].nunique()
-    if (dupes > 1).any():
-        bad = dupes[dupes > 1].index.tolist()
-        raise ValueError(f"patient(s) {bad} carry conflicting labels. Resolve before training.")
+    if validate_patient_labels:
+        duplicates = df.groupby("patient_id")["label"].nunique()
+        if (duplicates > 1).any():
+            bad = duplicates[duplicates > 1].index.tolist()
+            raise ValueError(f"patient(s) {bad} carry conflicting labels. Resolve before training.")
     return df

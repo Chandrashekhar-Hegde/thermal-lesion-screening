@@ -4,8 +4,10 @@ data:
   image_size: [224, 224]
 
 split:
-  test_frac: 0.20
-  val_frac: 0.20
+  strategy: repeated_patient_cv
+  n_folds: 5
+  n_repeats: 5
+  inner_val_frac: 0.20
   seed: 42
 
 train:
@@ -17,14 +19,22 @@ train:
   backbone: resnet18           # ImageNet-pretrained, final layer replaced
   pretrained: true
   early_stopping_patience: 6
+  save_fold_models: false      # avoids 25 large checkpoints unless explicitly needed
 
 eval:
   # Fix the miss rate you can clinically tolerate, then report whatever
   # specificity that costs. Do not tune the threshold to flatter the headline.
   target_sensitivity: 0.90
   n_bootstrap: 2000
-  patient_score_reducer: mean  # one mean score per patient before evaluation
+  checkpoint_reducer: mean
+  aggregation_candidates:
+    - {name: mean}
+    - {name: max}
+    - {name: top_k_mean, top_k: 3}
 
 edge:
   onnx_path: artifacts/model.onnx
   benchmark_runs: 200
+
+artifacts:
+  root: artifacts
