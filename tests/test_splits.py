@@ -23,6 +23,7 @@ from src.splits import (  # noqa: E402
     describe_split,
     patient_level_cv,
     patient_level_split,
+    repeated_patient_level_cv,
 )
 
 
@@ -103,6 +104,44 @@ def test_cv_folds_are_patient_grouped():
         )
 
 
+def test_repeated_cv_has_every_patient_in_one_test_fold_per_repeat():
+    manifest = make_manifest(n_patients=100)
+    folds = list(repeated_patient_level_cv(manifest, n_folds=5, n_repeats=3, seed=4))
+
+    assert len(folds) == 15
+    all_patients = set(manifest["patient_id"])
+    for repeat in range(3):
+        test_patients = []
+        for repeated_fold in folds:
+            if repeated_fold.repeat != repeat:
+                continue
+            split = repeated_fold.split
+            train = set(manifest.iloc[split.train]["patient_id"])
+            val = set(manifest.iloc[split.val]["patient_id"])
+            test = set(manifest.iloc[split.test]["patient_id"])
+            assert not train & val
+            assert not train & test
+            assert not val & test
+            test_patients.extend(test)
+
+        assert set(test_patients) == all_patients
+        assert len(test_patients) == len(all_patients)
+
+
+def test_repeated_cv_is_deterministic():
+    manifest = make_manifest(n_patients=100)
+    first = list(repeated_patient_level_cv(manifest, n_folds=5, n_repeats=2, seed=11))
+    second = list(repeated_patient_level_cv(manifest, n_folds=5, n_repeats=2, seed=11))
+
+    for index, left in enumerate(first):
+        right = second[index]
+        assert left.repeat == right.repeat
+        assert left.fold == right.fold
+        assert np.array_equal(left.split.train, right.split.train)
+        assert np.array_equal(left.split.val, right.split.val)
+        assert np.array_equal(left.split.test, right.split.test)
+
+
 def test_split_is_deterministic_under_seed():
     m = make_manifest()
     a = patient_level_split(m, seed=11)
@@ -116,6 +155,8 @@ def test_describe_split_reports_patient_counts():
     d = describe_split(m, s)
     assert set(d["split"]) == {"train", "val", "test"}
     assert d["patients"].sum() == m["patient_id"].nunique()
+    assert "positive_patients" in d
+    assert "patient_positive_rate" in d
 
 
 def test_split_rejects_invalid_total_fraction():

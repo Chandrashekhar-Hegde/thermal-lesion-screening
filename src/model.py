@@ -10,6 +10,7 @@ being able to defend out loud.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import torch
@@ -47,13 +48,18 @@ def export_onnx(
     except StopIteration:
         device = torch.device("cpu")
     dummy = torch.randn(1, 3, *image_size, device=device)
-    torch.onnx.export(
-        model,
-        dummy,
-        str(output_path),
-        input_names=["image"],
-        output_names=["logit"],
-        dynamic_axes={"image": {0: "batch"}, "logit": {0: "batch"}},
-        opset_version=17,
-    )
+    export_options = {
+        "input_names": ["image"],
+        "output_names": ["logit"],
+        "opset_version": 18,
+    }
+    export_parameters = inspect.signature(torch.onnx.export).parameters
+    if "dynamo" in export_parameters and "dynamic_shapes" in export_parameters:
+        export_options.update(dynamo=True, dynamic_shapes=({0: "batch"},))
+    else:  # PyTorch 2.0–2.5 legacy exporter
+        export_options["dynamic_axes"] = {
+            "image": {0: "batch"},
+            "logit": {0: "batch"},
+        }
+    torch.onnx.export(model, dummy, str(output_path), **export_options)
     return str(output_path)
